@@ -44,6 +44,7 @@
 CAN_HandleTypeDef hcan1;
 
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart3;
 
@@ -58,8 +59,9 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
-static void MX_TIM2_Init(void);
 static void MX_CAN1_Init(void);
+static void MX_TIM3_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -81,6 +83,7 @@ uint32_t HighState;
 uint32_t LowState;
 float mean_cr;
 float area;
+float errorcyclic;
 float crbuff[100];
 int crptr;
 /* USER CODE END 0 */
@@ -116,18 +119,24 @@ int main(void)
   MX_GPIO_Init();
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
-  MX_TIM2_Init();
   MX_CAN1_Init();
+  MX_TIM3_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
   HAL_CAN_Start(&hcan1);
-
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+  HAL_TIM_Base_Start(&htim2);
   HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
 
   TxHeader.DLC = 2 ; // Data length
   TxHeader.IDE = CAN_ID_STD;
   TxHeader.RTR = CAN_RTR_DATA;
-  TxHeader.StdId = 0x446; // ID
+  TxHeader.StdId = 0x123; // ID
+
+  TIM3->CCR1 = 1000;
+
+  __enable_irq();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -135,10 +144,14 @@ int main(void)
   while (1)
   {
 	  if(integrateflag){
-		  cyclic_ratio = areacalc();
-		  TxData[0] = cyclic_ratio;
-		  if (cyclic_ratio >= 0.6){
+		  errorcyclic = areacalc();
+		  TxData[0] = errorcyclic;
+		  if (errorcyclic >= 0.6){
 			  TxData[1] = 0x1; //Alarm
+			  HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin, GPIO_PIN_SET); // Témoin Lumineux d'alarme
+		  }
+		  else{
+			  HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin, GPIO_PIN_RESET);
 		  }
 		  HAL_CAN_AddTxMessage(&hcan1, &TxHeader, TxData, &TxMailbox);
 	  }
@@ -278,6 +291,65 @@ static void MX_TIM2_Init(void)
 }
 
 /**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 95;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 1999;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
+
+}
+
+/**
   * @brief USART3 Initialization Function
   * @param None
   * @retval None
@@ -378,8 +450,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(USER_Btn_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PA0 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  /*Configure GPIO pin : PA3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_3;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
@@ -405,8 +477,8 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(USB_OverCurrent_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+  HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -416,16 +488,21 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
-	if (GPIO_Pin == GPIO_PIN_0){
+	if (GPIO_Pin == GPIO_PIN_3){
 		// Si on lit un 1 => on est sur un front montant
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0)){
-			LowState = __HAL_TIM_GET_COUNTER(&htim2)-HighState;
-			TIM2->CNT = 0;
-			cyclic_ratio = HighState/(HighState+LowState);
-			integrateflag = 1;
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3)){
+			if(HighState == 0){
+				HAL_TIM_Base_Start(&htim2);
+			}
+			else{
+				LowState = __HAL_TIM_GET_COUNTER(&htim2)-HighState;
+				TIM2->CNT = 0;
+				cyclic_ratio = (HighState*100)/(HighState+LowState);
+				integrateflag = true;
+			}
 		}
 		// Si on lit 0 => on est sur un front descendant
-		if (!HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0)){
+		if (!HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3)){
 			HighState = __HAL_TIM_GET_COUNTER(&htim2);
 		}
 	}
@@ -442,7 +519,7 @@ float areacalc(void){
 		crptr = 0;
 	}
 
-	integrateflag = 0;
+	integrateflag = false;
 
 	return area;
 }
